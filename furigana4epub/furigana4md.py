@@ -198,6 +198,8 @@ def _furigana_plain(text: str) -> str:
 #   - enlaces:  [texto](url)  /  ![alt](url)
 #   - HTML inline ya existente: <...>
 #   - furigana ya existente: {…|…}
+#   - numerales circulados y caracteres especiales no japoneses (①②…㊿, ㍉, etc.)
+#   - secuencias de caracteres ASCII/no-CJK (preserva espacios, puntuación, etc.)
 _SKIP_PATTERN = re.compile(
     r'(`[^`]*`)'  # código inline
     r'|(\*{1,3}[^*]+\*{1,3})'  # negrita/cursiva *
@@ -205,6 +207,8 @@ _SKIP_PATTERN = re.compile(
     r'|(!?\[[^]]*]\([^)]*\))'  # enlaces e imágenes
     r'|(<[^>]+>)'  # etiquetas HTML inline
     r'|(\{[^}]+\|[^}]+})'  # furigana ya anotado {x|y}
+    r'|([\u2460-\u2473\u3251-\u32BF\u24B6-\u24E9\u3200-\u3247\u1F100-\u1F10C]+)'  # numerales/letras circuladas
+    r'|([^\u3000-\u9FFF\uF900-\uFAFF\u2F800-\u2FA1F\u3400-\u4DBF\u20000-\u2A6DF\uFF00-\uFFEF]+)'  # no-japonés (ASCII, espacios, etc.)
 )
 
 
@@ -232,6 +236,12 @@ def add_furigana_to_text(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 _FENCE_RE = re.compile(r'^(`{3,}|~{3,})')
+
+# Prefijos estructurales de Markdown que deben preservarse intactos
+# (headings, blockquotes, listas, reglas horizontales, etc.)
+_MD_PREFIX_RE = re.compile(
+    r'^(#{1,6}\s+|>\s*|-\s+|\*\s+|\+\s+|\d+\.\s+|={3,}|-{3,}|\*{3,}|_{3,})'
+)
 
 
 def process_markdown(source: str) -> str:
@@ -273,7 +283,14 @@ def process_markdown(source: str) -> str:
             elif line.endswith('\r'):
                 eol = '\r'
                 stripped = line[:-1]
-            output_lines.append(add_furigana_to_text(stripped) + eol)
+            # Extraer prefijo estructural de Markdown para preservarlo intacto
+            pm = _MD_PREFIX_RE.match(stripped)
+            if pm:
+                prefix = pm.group(0)
+                content = stripped[pm.end():]
+                output_lines.append(prefix + add_furigana_to_text(content) + eol)
+            else:
+                output_lines.append(add_furigana_to_text(stripped) + eol)
 
     return ''.join(output_lines)
 
