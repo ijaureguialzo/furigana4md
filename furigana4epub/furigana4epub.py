@@ -7,8 +7,7 @@ import zipfile
 
 from bs4 import BeautifulSoup
 
-from furigana4epub import yomituki
-from furigana4epub.version import version
+import yomituki
 
 def unzippen(filename, dst_path):
     input_file = zipfile.ZipFile(filename, 'r')
@@ -103,7 +102,7 @@ class EpubConvert:
 def main():
     import argparse
     parser = argparse.ArgumentParser(
-        description=f'A Python script to add/remove furigana for Japanese epub books. Using Mecab and Unidic. v{version}')
+        description=f'A Python script to add/remove furigana for Japanese epub books. Using Mecab and Unidic.')
     parser.add_argument(
         'paths', type=str, nargs='+',
         help='Paths of Japanese epub books,can be file names or file folders')

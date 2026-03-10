@@ -1,5 +1,20 @@
-# pyproject.toml
+[project]
+name = "furigana4md"
+version = "0.1.0"
+description = ""
+authors = [
+    { name = "Ion Jaureguialzo Sarasola" }
+]
+readme = "README.md"
+requires-python = "^3.14"
+dependencies = [
+    "beautifulsoup4 (>=4.14.3,<5.0.0)",
+    "fugashi (>=1.5.2,<2.0.0)",
+    "unidic-lite (>=1.0.8,<2.0.0)",
+    "lxml (>=6.0.2,<7.0.0)"
+]
+
+
 [build-system]
-requires = ["setuptools>=42", "wheel", "setuptools_scm[toml]>=3.4"]
-[tool.setuptools_scm]
-write_to = "furigana4epub/version.py"
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
