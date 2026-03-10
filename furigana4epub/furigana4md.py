@@ -30,51 +30,130 @@ def _is_kanji(ch: str) -> bool:
             0x2F800 <= cp <= 0x2FA1F)  # CJK Compatibility Supplement
 
 
+# Tagger N-best para consultar múltiples lecturas de un kanji aislado
+_tagger_nbest = yt.Tagger('-N 10')
+
+# Caracteres hiragana/katakana pequeños que NO son mora independiente:
+# se fusionan con la mora anterior (ぁぃぅぇぉっゃゅょゎ y sus equivalentes katakana)
+_SMALL_KANA = frozenset(
+    'ぁぃぅぇぉっゃゅょゎゕゖ'
+    'ァィゥェォッャュョヮヵヶ'
+)
+
+
+def _mora_len(s: str) -> int:
+    """Cuenta el número de moras fonéticas de una cadena hiragana/katakana.
+    Los caracteres pequeños (ょ, ゃ, っ, etc.) no cuentan como mora propia."""
+    return sum(1 for ch in s if ch not in _SMALL_KANA)
+
+
+def _all_readings_for_char(ch: str) -> dict[str, int]:
+    """
+    Devuelve un diccionario {lectura_hiragana: coste} para un carácter.
+    El coste es la posición en el N-best (0 = más probable), de modo que
+    lecturas más frecuentes tienen coste más bajo.
+
+    Para hiragana/katakana devuelve {forma_hiragana: 0}.
+    """
+    if not _is_kanji(ch):
+        return {yt.kata2hira(ch): 0}
+
+    readings: dict[str, int] = {}
+    for i, word in enumerate(_tagger_nbest(ch)):
+        kana = word.feature.kana
+        if kana and kana not in ('*', ''):
+            hira = yt.kata2hira(str(kana))
+            if hira not in readings:
+                readings[hira] = i  # primer índice = coste más bajo
+    # Fallback si N-best no devuelve nada
+    if not readings:
+        for token in yt.yomituki(ch):
+            if isinstance(token, tuple):
+                readings[token[1]] = 0
+    return readings if readings else {ch: 0}
+
+
 def _per_kanji_readings(surface: str, reading: str) -> list[str]:
     """
-    Dado un surface que puede contener varios kanji (ej. "友達", "ともだち"),
-    devuelve una lista con la lectura de cada kanji individual.
+    Dado un surface (ej. "希望") y su lectura global de MeCab (ej. "きぼう"),
+    devuelve la lista de lecturas por carácter (ej. ["き", "ぼう"]).
 
-    Estrategia: para cada carácter de surface, si es kanji se le pregunta a
-    MeCab su lectura; si es hiragana/katakana ya conocemos su valor. Luego
-    se consume la lectura global de izquierda a derecha para repartirla.
+    Función de coste por segmento:
+      dev_moras   = (moras(seg) - ideal_moras)²        ← criterio principal
+      dev_chars   = (chars(seg) - ideal_chars)² / 100  ← desempate fino
+      dict_pen    = 0 si seg ∈ N-best kanji, 1000 si no
+      small_pen   = 500 si seg empieza por kana pequeño (imposible fonético)
+      ctx_pen     = 0 si seg == lectura 1-best kanji aislado, 1.0 si no
+                    (solo cuando esa lectura es alcanzable en la posición actual)
 
-    Si la alineación falla se devuelve la lectura completa como único elemento.
+    Se itera de menor a mayor longitud; ctx_pen rompe empates favoreciendo
+    la lectura más probable del kanji aislado según MeCab.
     """
-    # Descomponemos surface en segmentos: kanji vs. no-kanji
-    segments: list[tuple[str, str | None]] = []  # (char, lectura_individual o None)
-    for ch in surface:
-        if _is_kanji(ch):
-            # Pedir a MeCab la lectura de este kanji aislado
-            tokens_ch = list(yt.yomituki(ch))
-            if tokens_ch and isinstance(tokens_ch[0], tuple):
-                segments.append((ch, tokens_ch[0][1]))
-            else:
-                segments.append((ch, None))
-        else:
-            # Hiragana/katakana: su propia lectura es el carácter en hiragana
-            segments.append((ch, yt.kata2hira(ch)))
+    n = len(surface)
+    if n == 1:
+        return [reading]
 
-    # Intentamos consumir `reading` de izquierda a derecha asignando cada
-    # segmento a su lectura esperada dentro de la lectura global.
-    result: list[str] = []
-    pos = 0
-    ok = True
-    for ch, seg_reading in segments:
-        if seg_reading is None:
-            ok = False
-            break
-        if reading[pos:pos + len(seg_reading)] == seg_reading:
-            result.append(seg_reading)
-            pos += len(seg_reading)
-        else:
-            ok = False
-            break
+    r_len = len(reading)
+    if r_len < n:
+        return [reading]
 
-    if ok and pos == len(reading):
-        return result
-    # Fallback: lectura completa como un único bloque
-    return [reading]
+    ideal_moras = _mora_len(reading) / n
+    ideal_chars = r_len / n
+
+    valid: list[dict[str, int]] = [_all_readings_for_char(ch) for ch in surface]
+
+    def _solo_reading(char_idx: int) -> str | None:
+        ch = surface[char_idx]
+        if not _is_kanji(ch):
+            return yt.kata2hira(ch)
+        tokens = list(yt.tagger(ch))
+        if tokens:
+            kana = tokens[0].feature.kana
+            if kana and kana not in ('*', ''):
+                return yt.kata2hira(str(kana))
+        return None
+
+    solo = [_solo_reading(i) for i in range(n)]
+
+    best: list[str] | None = None
+    best_cost: float = float('inf')
+
+    def search(char_idx: int, pos: int, segments: list[str], cost: float) -> None:
+        nonlocal best, best_cost
+        if cost >= best_cost:
+            return
+        if char_idx == n:
+            if pos == r_len and cost < best_cost:
+                best_cost = cost
+                best = segments[:]
+            return
+        remaining = n - char_idx - 1
+        max_end = r_len - remaining
+        char_valid = valid[char_idx]
+        ctx_read = solo[char_idx]
+        ctx_reachable = (
+                ctx_read is not None
+                and pos + len(ctx_read) <= max_end
+                and reading[pos:pos + len(ctx_read)] == ctx_read
+        )
+
+        for end in range(pos + 1, max_end + 1):  # menor a mayor
+            segment = reading[pos:end]
+            # Corte fonéticamente imposible: kana pequeño al inicio
+            if segment[0] in _SMALL_KANA:
+                continue
+            in_dict = segment in char_valid
+            dev_moras = (_mora_len(segment) - ideal_moras) ** 2
+            dev_chars = (len(segment) - ideal_chars) ** 2 / 100.0
+            dict_pen = 0.0 if in_dict else 1000.0
+            ctx_pen = (0.0 if segment == ctx_read else 1.0) if ctx_reachable else 0.0
+            seg_cost = dev_moras + dev_chars + dict_pen + ctx_pen
+            segments.append(segment)
+            search(char_idx + 1, end, segments, cost + seg_cost)
+            segments.pop()
+
+    search(0, 0, [], 0.0)
+    return best if best is not None else [reading]
 
 
 def _build_ruby_block(surface: str, reading: str) -> str:
