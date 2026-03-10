@@ -30,20 +30,66 @@ def _is_kanji(ch: str) -> bool:
             0x2F800 <= cp <= 0x2FA1F)  # CJK Compatibility Supplement
 
 
-def _build_ruby_block(pairs: list[tuple]) -> str:
+def _per_kanji_readings(surface: str, reading: str) -> list[str]:
     """
-    Recibe una lista de (kanji_char_o_grupo, lectura) y construye el bloque
-    {kanji1kanji2...|lec1|lec2...}
+    Dado un surface que puede contener varios kanji (ej. "友達", "ともだち"),
+    devuelve una lista con la lectura de cada kanji individual.
+
+    Estrategia: para cada carácter de surface, si es kanji se le pregunta a
+    MeCab su lectura; si es hiragana/katakana ya conocemos su valor. Luego
+    se consume la lectura global de izquierda a derecha para repartirla.
+
+    Si la alineación falla se devuelve la lectura completa como único elemento.
     """
-    kanji_part = ''.join(k for k, _ in pairs)
-    readings = [r for _, r in pairs]
-    return '{' + kanji_part + '|' + '|'.join(readings) + '}'
+    # Descomponemos surface en segmentos: kanji vs. no-kanji
+    segments: list[tuple[str, str | None]] = []  # (char, lectura_individual o None)
+    for ch in surface:
+        if _is_kanji(ch):
+            # Pedir a MeCab la lectura de este kanji aislado
+            tokens_ch = list(yt.yomituki(ch))
+            if tokens_ch and isinstance(tokens_ch[0], tuple):
+                segments.append((ch, tokens_ch[0][1]))
+            else:
+                segments.append((ch, None))
+        else:
+            # Hiragana/katakana: su propia lectura es el carácter en hiragana
+            segments.append((ch, yt.kata2hira(ch)))
+
+    # Intentamos consumir `reading` de izquierda a derecha asignando cada
+    # segmento a su lectura esperada dentro de la lectura global.
+    result: list[str] = []
+    pos = 0
+    ok = True
+    for ch, seg_reading in segments:
+        if seg_reading is None:
+            ok = False
+            break
+        if reading[pos:pos + len(seg_reading)] == seg_reading:
+            result.append(seg_reading)
+            pos += len(seg_reading)
+        else:
+            ok = False
+            break
+
+    if ok and pos == len(reading):
+        return result
+    # Fallback: lectura completa como un único bloque
+    return [reading]
+
+
+def _build_ruby_block(surface: str, reading: str) -> str:
+    """
+    Construye {kanji1kanji2...|lec1|lec2...} dividiendo la lectura
+    kanji a kanji cuando es posible.
+    """
+    per_kanji = _per_kanji_readings(surface, reading)
+    return '{' + surface + '|' + '|'.join(per_kanji) + '}'
 
 
 def _furigana_plain(text: str) -> str:
     """
     Procesa texto plano japonés con yomituki y devuelve el texto
-    con furigana en el formato {kanji|lectura}.
+    con furigana en el formato {kanji|lec1|lec2...}.
 
     yomituki() devuelve:
       - str            → texto sin furigana (hiragana/katakana/puntuación…)
@@ -53,24 +99,12 @@ def _furigana_plain(text: str) -> str:
         return text
 
     result = ''
-    tokens = list(yt.yomituki(text))
-
-    # Agrupamos tuplas (kanji, lectura) consecutivas en un único bloque.
-    # Las cadenas str se emiten directamente.
-    i = 0
-    while i < len(tokens):
-        token = tokens[i]
+    for token in yt.yomituki(text):
         if isinstance(token, tuple):
-            # Acumular tuplas contiguas
-            block = [token]
-            i += 1
-            while i < len(tokens) and isinstance(tokens[i], tuple):
-                block.append(tokens[i])
-                i += 1
-            result += _build_ruby_block(block)
+            surface, reading = token
+            result += _build_ruby_block(surface, reading)
         else:
             result += token
-            i += 1
 
     return result
 
