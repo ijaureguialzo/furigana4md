@@ -13,6 +13,7 @@ El hiragana/katakana puro queda fuera de las llaves.
 
 import re
 import sys
+import unicodedata
 
 import yomituki as yt
 
@@ -165,6 +166,14 @@ def _build_ruby_block(surface: str, reading: str) -> str:
     return '{' + surface + '|' + '|'.join(per_kanji) + '}'
 
 
+# Días del mes cuya lectura genuina termina en 「か」:
+#   2日ふつか  3日みっか  4日よっか  5日いつか  6日むいか
+#   7日なのか  8日ようか  9日ここのか  10日とおか
+#   14日じゅうよっか  20日はつか  24日にじゅうよっか
+# Todos los demás (11-13, 15-19, 21-23, 25-31) usan 「にち」.
+_KA_DAYS = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 14, 20, 24})
+
+
 def _furigana_plain(text: str) -> str:
     """
     Procesa texto plano japonés con yomituki y devuelve el texto
@@ -178,12 +187,26 @@ def _furigana_plain(text: str) -> str:
         return text
 
     result = ''
+    prev_plain = ''  # último token de cadena emitido por yomituki
+
     for token in yt.yomituki(text):
         if isinstance(token, tuple):
             surface, reading = token
+
+            # MeCab asigna 「か」 como lectura base de 日 como contador.
+            # Corregir a 「にち」 cuando el número precedente no es uno de los
+            # días especiales (2-10, 14, 20, 24) que sí usan esa lectura.
+            if surface == '日' and reading == 'か' and prev_plain:
+                norm = unicodedata.normalize('NFKC', prev_plain)
+                if norm.isdigit():
+                    if int(norm) not in _KA_DAYS:
+                        reading = 'にち'
+
             result += _build_ruby_block(surface, reading)
+            prev_plain = ''
         else:
             result += token
+            prev_plain = token
 
     return result
 
