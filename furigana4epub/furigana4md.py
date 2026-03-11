@@ -208,26 +208,59 @@ _SKIP_PATTERN = re.compile(
     r'|(<[^>]+>)'  # etiquetas HTML inline
     r'|(\{[^}]+\|[^}]+})'  # furigana ya anotado {x|y}
     r'|([\u2460-\u2473\u3251-\u32BF\u24B6-\u24E9\u3200-\u3247\u1F100-\u1F10C]+)'  # numerales/letras circuladas
-    r'|([^\u3000-\u9FFF\uF900-\uFAFF\U0002F800-\U0002FA1F\u3400-\u4DBF\U00020000-\U0002A6DF\uFF00-\uFFEF]+)'  # no-japonés (ASCII, espacios, etc.)
+    r'|(\d+)'  # dígitos ASCII: siempre como token propio para preservar contexto MeCab
+    r'|([^\u3000-\u9FFF\uF900-\uFAFF\U0002F800-\U0002FA1F\u3400-\u4DBF\U00020000-\U0002A6DF\uFF00-\uFFEF0-9]+)'
+    # no-japonés sin dígitos (espacios, puntuación ASCII, etc.)
 )
+
+# Detecta secuencias de dígitos ASCII puros (p. ej. "40", "2026", "22")
+_DIGITS_ONLY_RE = re.compile(r'^\d+$')
 
 
 def add_furigana_to_text(text: str) -> str:
     """
     Añade furigana a los segmentos de texto plano de una línea Markdown,
     dejando intactos los tokens especiales (código, enlaces, HTML…).
+
+    Los dígitos (ASCII o de ancho completo intercalados en texto japonés)
+    se acumulan en el mismo buffer que el texto japonés y se envían juntos
+    a MeCab como un único bloque, de modo que el analizador morfológico
+    dispone del contexto numérico completo para asignar la lectura correcta
+    a los contadores:
+      40歳     → 40{歳|さい}
+      8月22日  → 8{月|がつ}22{日|にち}
+      ３月17日 → ３{月|がつ}17{日|にち}
+
+    El buffer se vuelca únicamente al encontrar un token no numérico
+    (código inline, negrita, enlace, HTML, etc.).
     """
     result = ''
     last = 0
+    japanese_buffer = ''  # acumula texto japonés + dígitos intercalados
+
     for m in _SKIP_PATTERN.finditer(text):
         plain = text[last:m.start()]
         if plain:
-            result += _furigana_plain(plain)
-        result += m.group(0)
+            japanese_buffer += plain
+
+        skip_text = m.group(0)
+        if _DIGITS_ONLY_RE.match(skip_text):
+            # Dígito ASCII: se incluye en el buffer para dar contexto numérico
+            japanese_buffer += skip_text
+        else:
+            # Token no numérico: volcar el buffer japonés acumulado
+            if japanese_buffer:
+                result += _furigana_plain(japanese_buffer)
+                japanese_buffer = ''
+            result += skip_text
         last = m.end()
+
     plain = text[last:]
     if plain:
-        result += _furigana_plain(plain)
+        japanese_buffer += plain
+    if japanese_buffer:
+        result += _furigana_plain(japanese_buffer)
+
     return result
 
 
