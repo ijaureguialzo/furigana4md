@@ -166,12 +166,27 @@ def _build_ruby_block(surface: str, reading: str) -> str:
     return '{' + surface + '|' + '|'.join(per_kanji) + '}'
 
 
-# Días del mes cuya lectura genuina termina en 「か」:
+# Días del mes con lectura irregular (no terminan en 「にち»):
 #   2日ふつか  3日みっか  4日よっか  5日いつか  6日むいか
 #   7日なのか  8日ようか  9日ここのか  10日とおか
 #   14日じゅうよっか  20日はつか  24日にじゅうよっか
-# Todos los demás (11-13, 15-19, 21-23, 25-31) usan 「にち」.
-_KA_DAYS = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 14, 20, 24})
+# Se transcriben como bloque único: {9日|ここのか}
+_KA_DAY_READINGS: dict[int, str] = {
+    1: 'ついたち',
+    2: 'ふつか',
+    3: 'みっか',
+    4: 'よっか',
+    5: 'いつか',
+    6: 'むいか',
+    7: 'なのか',
+    8: 'ようか',
+    9: 'ここのか',
+    10: 'とおか',
+    14: 'じゅうよっか',
+    20: 'はつか',
+    24: 'にじゅうよっか',
+}
+_KA_DAYS = frozenset(_KA_DAY_READINGS)
 
 
 def _furigana_plain(text: str) -> str:
@@ -182,32 +197,46 @@ def _furigana_plain(text: str) -> str:
     yomituki() devuelve:
       - str            → texto sin furigana (hiragana/katakana/puntuación…)
       - (str, str)     → (segmento_kanji, lectura_hiragana)
+
+    La cadena pura se retiene en «pending_plain» para poder combinarla
+    con el siguiente token kanji cuando sea necesario:
+      • Día irregular (2-10, 14, 20, 24): {9日|ここのか}
+      • Día regular  (11-13, 15-19, 21-23, 25-31): 22{日|にち}
     """
     if not text.strip():
         return text
 
     result = ''
-    prev_plain = ''  # último token de cadena emitido por yomituki
+    pending_plain = ''  # cadena pura retenida pendiente de emitir
 
     for token in yt.yomituki(text):
         if isinstance(token, tuple):
             surface, reading = token
 
-            # MeCab asigna 「か」 como lectura base de 日 como contador.
-            # Corregir a 「にち」 cuando el número precedente no es uno de los
-            # días especiales (2-10, 14, 20, 24) que sí usan esa lectura.
-            if surface == '日' and reading == 'か' and prev_plain:
-                norm = unicodedata.normalize('NFKC', prev_plain)
+            # MeCab asigna «か» como lectura base de 日 como contador.
+            if surface == '日' and reading == 'か' and pending_plain:
+                norm = unicodedata.normalize('NFKC', pending_plain)
                 if norm.isdigit():
-                    if int(norm) not in _KA_DAYS:
+                    day = int(norm)
+                    if day in _KA_DAYS:
+                        # Día irregular: número + 日 → bloque único con lectura completa
+                        result += '{' + pending_plain + '日|' + _KA_DAY_READINGS[day] + '}'
+                        pending_plain = ''
+                        continue
+                    else:
+                        # Día regular: corregir か → にち
                         reading = 'にち'
 
+            # Volcar la cadena pendiente antes del bloque ruby
+            result += pending_plain
+            pending_plain = ''
             result += _build_ruby_block(surface, reading)
-            prev_plain = ''
         else:
-            result += token
-            prev_plain = token
+            # Nueva cadena: volcar la anterior y retener la nueva
+            result += pending_plain
+            pending_plain = token
 
+    result += pending_plain  # vaciar buffer al final del texto
     return result
 
 
