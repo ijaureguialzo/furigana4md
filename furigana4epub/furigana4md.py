@@ -208,7 +208,7 @@ _SKIP_PATTERN = re.compile(
     r'|(<[^>]+>)'  # etiquetas HTML inline
     r'|(\{[^}]+\|[^}]+})'  # furigana ya anotado {x|y}
     r'|([\u2460-\u2473\u3251-\u32BF\u24B6-\u24E9\u3200-\u3247\u1F100-\u1F10C]+)'  # numerales/letras circuladas
-    r'|([^\u3000-\u9FFF\uF900-\uFAFF\u2F800-\u2FA1F\u3400-\u4DBF\u20000-\u2A6DF\uFF00-\uFFEF]+)'  # no-japonés (ASCII, espacios, etc.)
+    r'|([^\u3000-\u9FFF\uF900-\uFAFF\U0002F800-\U0002FA1F\u3400-\u4DBF\U00020000-\U0002A6DF\uFF00-\uFFEF]+)'  # no-japonés (ASCII, espacios, etc.)
 )
 
 
