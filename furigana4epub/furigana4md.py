@@ -188,6 +188,13 @@ _KA_DAY_READINGS: dict[int, str] = {
 }
 _KA_DAYS = frozenset(_KA_DAY_READINGS)
 
+_ASCII_TO_FULLWIDTH = str.maketrans('0123456789', '０１２３４５６７８９')
+
+
+def _to_fullwidth_digits(s: str) -> str:
+    """Convierte dígitos ASCII (0-9) a dígitos de ancho completo (０-９)."""
+    return s.translate(_ASCII_TO_FULLWIDTH)
+
 
 def _furigana_plain(text: str) -> str:
     """
@@ -220,7 +227,9 @@ def _furigana_plain(text: str) -> str:
                     day = int(norm)
                     if day in _KA_DAYS:
                         # Día irregular: número + 日 → bloque único con lectura completa
-                        result += '{' + pending_plain + '日|' + _KA_DAY_READINGS[day] + '}'
+                        # El número se escribe siempre en dígitos de ancho completo.
+                        fw_num = _to_fullwidth_digits(pending_plain)
+                        result += '{' + fw_num + '日|' + _KA_DAY_READINGS[day] + '}'
                         pending_plain = ''
                         continue
                     else:
